@@ -396,12 +396,14 @@ impl<A: Clone + 'static> DropDownMenuBuilder<A> {
             size,
             active: false,
             hovered_entry_index: None,
+            selected_entry_index: None,
             cursor_icon,
         })
         .builder_values(z_index, scissor_rect, class, window_cx)
         .rect(Rect::new(position, Size::zero()))
         .flags(
             ElementFlags::PAINTS
+                | ElementFlags::LISTENS_TO_KEYS_WHEN_FOCUSED
                 | ElementFlags::LISTENS_TO_POINTER_INSIDE_BOUNDS
                 | ElementFlags::LISTENS_TO_FOCUS_CHANGE
                 | ElementFlags::LISTENS_TO_POINTER_OUTSIDE_BOUNDS_WHEN_FOCUSED
@@ -419,8 +421,34 @@ struct DropDownMenuElement<A: Clone + 'static> {
     entries: Vec<MenuEntryInner>,
     size: Size,
     active: bool,
+    // the index of the entry that's currently being hovered by the mouse
     hovered_entry_index: Option<usize>,
+    // the index of the entry that was selected using arrow keys
+    selected_entry_index: Option<usize>,
     cursor_icon: Option<CursorIcon>,
+}
+
+impl<A: Clone + 'static> DropDownMenuElement<A> {
+    fn next_selectable_index(&self, select_downwards: bool) -> usize {
+        let Some(mut idx) = self.hovered_entry_index.or(self.selected_entry_index) else {
+            return 0;
+        };
+
+        loop {
+            if select_downwards && idx < self.entries.len() - 1 {
+                idx += 1;
+            } else if !select_downwards && idx > 0 {
+                idx -= 1;
+            } else {
+                break;
+            }
+            if !matches!(self.entries[idx], MenuEntryInner::Divider { .. }) {
+                break;
+            }
+        }
+
+        idx
+    }
 }
 
 impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
@@ -490,6 +518,7 @@ impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
             ElementEvent::Focus(false) => {
                 self.active = false;
                 self.hovered_entry_index = None;
+                self.selected_entry_index = None;
                 cx.set_rect(Rect::new(cx.rect().origin, Size::zero()));
             }
             ElementEvent::Pointer(PointerEvent::Moved { position, .. }) => {
@@ -579,6 +608,61 @@ impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
 
                 return EventCaptureStatus::Captured;
             }
+            ElementEvent::Keyboard(KeyboardEvent {
+                state: KeyState::Down,
+                code: Code::ArrowUp,
+                ..
+            }) => {
+                let prev = self.selected_entry_index;
+                self.selected_entry_index = Some(self.next_selectable_index(false));
+                if self.selected_entry_index != prev {
+                    cx.request_repaint();
+                }
+                self.hovered_entry_index = None;
+                return EventCaptureStatus::Captured;
+            }
+            ElementEvent::Keyboard(KeyboardEvent {
+                state: KeyState::Down,
+                code: Code::ArrowDown,
+                ..
+            }) => {
+                let prev = self.selected_entry_index;
+                self.selected_entry_index = Some(self.next_selectable_index(true));
+                if self.selected_entry_index != prev {
+                    cx.request_repaint();
+                }
+                self.hovered_entry_index = None;
+                return EventCaptureStatus::Captured;
+            }
+            ElementEvent::Keyboard(KeyboardEvent {
+                state: KeyState::Down,
+                code: Code::Enter,
+                ..
+            }) => {
+                if let Some(MenuEntryInner::Option { unique_id, .. }) = self
+                    .hovered_entry_index
+                    .or(self.selected_entry_index)
+                    .map(|idx| &self.entries[idx])
+                {
+                    if let Some(action) = &mut self.action {
+                        cx.send_action((action)(*unique_id)).unwrap();
+                    }
+                    cx.release_focus();
+                    cx.cursor_icon = CursorIcon::Default;
+                    return EventCaptureStatus::Captured;
+                }
+            }
+            ElementEvent::Keyboard(KeyboardEvent {
+                state: KeyState::Down,
+                code: Code::Escape,
+                ..
+            }) => {
+                // NOTE: the arm for `ElementEvent::Focus` will close the dropdown menu when it
+                // loses focus by any means, so we don't have to do it here.
+                cx.release_focus();
+                cx.cursor_icon = CursorIcon::Default;
+                return EventCaptureStatus::Captured;
+            }
             ElementEvent::PositionChanged => {
                 if !self.active {
                     return EventCaptureStatus::NotCaptured;
@@ -624,7 +708,9 @@ impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
                     start_y,
                     ..
                 } => {
-                    let hovered = if let Some(hovered_index) = self.hovered_entry_index {
+                    let hovered = if let Some(hovered_index) =
+                        self.hovered_entry_index.or(self.selected_entry_index)
+                    {
                         i == hovered_index
                     } else {
                         false
