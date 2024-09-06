@@ -429,9 +429,13 @@ struct DropDownMenuElement<A: Clone + 'static> {
 }
 
 impl<A: Clone + 'static> DropDownMenuElement<A> {
-    fn next_selectable_index(&self, select_downwards: bool) -> usize {
+    fn next_selectable_index(&self, select_downwards: bool) -> Option<usize> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
         let Some(mut idx) = self.hovered_entry_index.or(self.selected_entry_index) else {
-            return 0;
+            return Some(0);
         };
 
         loop {
@@ -447,7 +451,7 @@ impl<A: Clone + 'static> DropDownMenuElement<A> {
             }
         }
 
-        idx
+        Some(idx)
     }
 }
 
@@ -614,7 +618,7 @@ impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
                 ..
             }) => {
                 let prev = self.selected_entry_index;
-                self.selected_entry_index = Some(self.next_selectable_index(false));
+                self.selected_entry_index = self.next_selectable_index(false);
                 if self.selected_entry_index != prev {
                     cx.request_repaint();
                 }
@@ -627,7 +631,7 @@ impl<A: Clone + 'static> Element<A> for DropDownMenuElement<A> {
                 ..
             }) => {
                 let prev = self.selected_entry_index;
-                self.selected_entry_index = Some(self.next_selectable_index(true));
+                self.selected_entry_index = self.next_selectable_index(true);
                 if self.selected_entry_index != prev {
                     cx.request_repaint();
                 }
